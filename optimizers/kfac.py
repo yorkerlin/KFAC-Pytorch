@@ -18,7 +18,10 @@ class KFACOptimizer(optim.Optimizer):
                  weight_decay=0,
                  TCov=10,
                  TInv=100,
-                 batch_averaged=True):
+                 batch_averaged=True,
+                 cast_dtype = torch.float32,
+                 use_eign = True,
+                 ):
         if lr < 0.0:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if momentum < 0.0:
@@ -42,6 +45,8 @@ class KFACOptimizer(optim.Optimizer):
         self._prepare_model()
 
         self.steps = 0
+        self.cast_dtype = cast_dtype
+        self.use_eign = use_eign
 
         self.m_aa, self.m_gg = {}, {}
         self.Q_a, self.Q_g = {}, {}
@@ -89,13 +94,29 @@ class KFACOptimizer(optim.Optimizer):
         :return: no returns.
         """
         eps = 1e-10  # for numerical stability
-        self.d_a[m], self.Q_a[m] = torch.symeig(
-            self.m_aa[m], eigenvectors=True)
-        self.d_g[m], self.Q_g[m] = torch.symeig(
-            self.m_gg[m], eigenvectors=True)
+        self.d_a[m], self.Q_a[m] = torch.linalg.eigh(
+            self.m_aa[m].to(dtype=torch.float32), UPLO='U')
+        self.d_g[m], self.Q_g[m] = torch.linalg.eigh(
+            self.m_gg[m].to(dtype=torch.float32), UPLO='U')
 
-        self.d_a[m].mul_((self.d_a[m] > eps).float())
-        self.d_g[m].mul_((self.d_g[m] > eps).float())
+        self.d_a[m].mul_((self.d_a[m] > eps).float()).to(dtype=self.cast_dtype)
+        self.d_g[m].mul_((self.d_g[m] > eps).float()).to(dtype=self.cast_dtype)
+        self.Q_a[m] = self.Q_a[m].to(dtype=self.cast_dtype)
+        self.Q_g[m] = self.Q_g[m].to(dtype=self.cast_dtype)
+
+
+    def _inv_covs(self, m, damping):
+        """Inverses the covariances."""
+        eps = damping
+        diag_aat = self.m_aa[m].new(self.m_aa[m].shape[0]).fill_(eps)
+        diag_ggt = self.m_gg[m].new(self.m_gg[m].shape[0]).fill_(eps)
+
+        self.Q_a[m] = (self.m_aa[m] +
+                torch.diag(diag_aat)).to(dtype=torch.float32).inverse().to(dtype=self.cast_dtype)
+        self.Q_g[m] = (self.m_gg[m] +
+                torch.diag(diag_ggt)).to(dtype=torch.float32).inverse().to(dtype=self.cast_dtype)
+
+
 
     @staticmethod
     def _get_matrix_form_grad(m, classname):
@@ -110,7 +131,7 @@ class KFACOptimizer(optim.Optimizer):
             p_grad_mat = m.weight.grad.data
         if m.bias is not None:
             p_grad_mat = torch.cat([p_grad_mat, m.bias.grad.data.view(-1, 1)], 1)
-        return p_grad_mat
+        return p_grad_mat.to(dtype=self.cast_dtype)
 
     def _get_natural_grad(self, m, p_grad_mat, damping):
         """
@@ -120,9 +141,13 @@ class KFACOptimizer(optim.Optimizer):
         """
         # p_grad_mat is of output_dim * input_dim
         # inv((ss')) p_grad_mat inv(aa') = [ Q_g (1/R_g) Q_g^T ] @ p_grad_mat @ [Q_a (1/R_a) Q_a^T]
-        v1 = self.Q_g[m].t() @ p_grad_mat @ self.Q_a[m]
-        v2 = v1 / (self.d_g[m].unsqueeze(1) * self.d_a[m].unsqueeze(0) + damping)
-        v = self.Q_g[m] @ v2 @ self.Q_a[m].t()
+        if self.use_eign:
+            v1 = self.Q_g[m].t() @ p_grad_mat @ self.Q_a[m]
+            v2 = v1 / (self.d_g[m].unsqueeze(1) * self.d_a[m].unsqueeze(0) + damping)
+            v = self.Q_g[m] @ v2 @ self.Q_a[m].t()
+        else:
+            v = self.Q_g[m] @ p_grad_mat @ self.Q_a[m]
+
         if m.bias is not None:
             # we always put gradient w.r.t weight in [0]
             # and w.r.t bias in [1]
@@ -142,7 +167,8 @@ class KFACOptimizer(optim.Optimizer):
             vg_sum += (v[0] * m.weight.grad.data * lr ** 2).sum().item()
             if m.bias is not None:
                 vg_sum += (v[1] * m.bias.grad.data * lr ** 2).sum().item()
-        nu = min(1.0, math.sqrt(self.kl_clip / vg_sum))
+        # nu = min(1.0, math.sqrt(self.kl_clip / vg_sum))
+        nu = 1.0
 
         for m in self.modules:
             v = updates[m]
@@ -186,7 +212,10 @@ class KFACOptimizer(optim.Optimizer):
         for m in self.modules:
             classname = m.__class__.__name__
             if self.steps % self.TInv == 0:
-                self._update_inv(m)
+                if self.use_eign:
+                    self._update_inv(m)
+                else:
+                    self._inv_covs(m, damping)
             p_grad_mat = self._get_matrix_form_grad(m, classname)
             v = self._get_natural_grad(m, p_grad_mat, damping)
             updates[m] = v
