@@ -48,6 +48,7 @@ class KFACOptimizer(optim.Optimizer):
         self.steps = 0
         self.cast_dtype = cast_dtype
         self.use_eign = use_eign
+        self.grad_scale = 1.0
 
         self.m_aa, self.m_gg = {}, {}
         self.Q_a, self.Q_g = {}, {}
@@ -70,6 +71,7 @@ class KFACOptimizer(optim.Optimizer):
         # Accumulate statistics for Fisher matrices
         if self.steps % self.TCov == 0:
             gg = self.CovGHandler(grad_output[0].data, module, self.batch_averaged)
+            gg /= (self.grad_scale**2)
             # Initialize buffers
             if self.steps == 0:
                 self.m_gg[module] = torch.diag(gg.new(gg.size(0)).fill_(1))
@@ -210,6 +212,8 @@ class KFACOptimizer(optim.Optimizer):
         lr = group['lr']
         damping = group['damping']
         updates = {}
+        # print('lr_cov:', 1.0 - self.stat_decay)
+        # print('grad_scale:',  self.grad_scale)
         for m in self.modules:
             classname = m.__class__.__name__
             if self.steps % self.TInv == 0:
@@ -224,3 +228,4 @@ class KFACOptimizer(optim.Optimizer):
 
         self._step(closure)
         self.steps += 1
+        self.grad_scale = 1.0
