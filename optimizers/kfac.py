@@ -22,6 +22,7 @@ class KFACOptimizer(optim.Optimizer):
                  cast_dtype = torch.float32,
                  use_eign = True,
                  ):
+        print('org kfac')
         if lr < 0.0:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if momentum < 0.0:
@@ -67,7 +68,7 @@ class KFACOptimizer(optim.Optimizer):
 
     def _save_grad_output(self, module, grad_input, grad_output):
         # Accumulate statistics for Fisher matrices
-        if self.acc_stats and self.steps % self.TCov == 0:
+        if self.steps % self.TCov == 0:
             gg = self.CovGHandler(grad_output[0].data, module, self.batch_averaged)
             # Initialize buffers
             if self.steps == 0:
@@ -76,7 +77,7 @@ class KFACOptimizer(optim.Optimizer):
 
     def _prepare_model(self):
         count = 0
-        print(self.model)
+        # print(self.model)
         print("=> We keep following layers in KFAC. ")
         for module in self.model.modules():
             classname = module.__class__.__name__
@@ -85,7 +86,7 @@ class KFACOptimizer(optim.Optimizer):
                 self.modules.append(module)
                 module.register_forward_pre_hook(self._save_input)
                 module.register_backward_hook(self._save_grad_output)
-                print('(%s): %s' % (count, module))
+                # print('(%s): %s' % (count, module))
                 count += 1
 
     def _update_inv(self, m):
@@ -119,7 +120,7 @@ class KFACOptimizer(optim.Optimizer):
 
 
     @staticmethod
-    def _get_matrix_form_grad(m, classname):
+    def _get_matrix_form_grad(m, classname, cast_dtype):
         """
         :param m: the layer
         :param classname: the class name of the layer
@@ -131,7 +132,7 @@ class KFACOptimizer(optim.Optimizer):
             p_grad_mat = m.weight.grad.data
         if m.bias is not None:
             p_grad_mat = torch.cat([p_grad_mat, m.bias.grad.data.view(-1, 1)], 1)
-        return p_grad_mat.to(dtype=self.cast_dtype)
+        return p_grad_mat.to(dtype=cast_dtype)
 
     def _get_natural_grad(self, m, p_grad_mat, damping):
         """
@@ -190,7 +191,7 @@ class KFACOptimizer(optim.Optimizer):
                     continue
                 d_p = p.grad.data
                 if weight_decay != 0 and self.steps >= 20 * self.TCov:
-                    d_p.add_(weight_decay, p.data)
+                    d_p.add_(p.data, alpha=weight_decay)
                 if momentum != 0:
                     param_state = self.state[p]
                     if 'momentum_buffer' not in param_state:
@@ -198,10 +199,10 @@ class KFACOptimizer(optim.Optimizer):
                         buf.mul_(momentum).add_(d_p)
                     else:
                         buf = param_state['momentum_buffer']
-                        buf.mul_(momentum).add_(1, d_p)
+                        buf.mul_(momentum).add_(d_p)
                     d_p = buf
 
-                p.data.add_(-group['lr'], d_p)
+                p.data.add_(d_p, alpha=-group['lr'])
 
     def step(self, closure=None):
         # FIXME(CW): temporal fix for compatibility with Official LR scheduler.
@@ -216,7 +217,7 @@ class KFACOptimizer(optim.Optimizer):
                     self._update_inv(m)
                 else:
                     self._inv_covs(m, damping)
-            p_grad_mat = self._get_matrix_form_grad(m, classname)
+            p_grad_mat = self._get_matrix_form_grad(m, classname, self.cast_dtype)
             v = self._get_natural_grad(m, p_grad_mat, damping)
             updates[m] = v
         self._kl_clip_and_update_grad(updates, lr)
