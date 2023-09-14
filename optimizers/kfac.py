@@ -3,8 +3,8 @@ import math
 import torch
 import torch.optim as optim
 
-from utils.kfac_utils import (ComputeCovA, ComputeCovG)
-from utils.kfac_utils import update_running_stat
+from utils.org_kfac_utils import (ComputeCovA, ComputeCovG)
+from utils.org_kfac_utils import update_running_stat
 
 
 class KFACOptimizer(optim.Optimizer):
