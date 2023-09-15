@@ -21,6 +21,7 @@ class KFACOptimizer(optim.Optimizer):
                  batch_averaged=True,
                  cast_dtype = torch.float32,
                  use_eign = True,
+                 using_adamw = True,
                  ):
         print('org kfac')
         if lr < 0.0:
@@ -49,6 +50,7 @@ class KFACOptimizer(optim.Optimizer):
         self.cast_dtype = cast_dtype
         self.use_eign = use_eign
         self.grad_scale = 1.0
+        self.using_adamw = using_adamw
 
         self.m_aa, self.m_gg = {}, {}
         self.Q_a, self.Q_g = {}, {}
@@ -90,6 +92,54 @@ class KFACOptimizer(optim.Optimizer):
                 module.register_backward_hook(self._save_grad_output)
                 # print('(%s): %s' % (count, module))
                 count += 1
+
+
+    def _prepare_model(self): #ok
+        count = 0
+        self.param_keys={}
+        self.get_name = {}
+        # print(self.model)
+        print("=> We keep following layers in. ")
+        for module in self.model.modules():
+            classname = module.__class__.__name__
+            # print('=> We keep following layers. <=')
+            if classname in self.known_modules:
+
+                for name, param in module.named_parameters():
+                    if param.requires_grad:
+                        self.param_keys.setdefault(param.data_ptr(), module)
+
+                self.modules.append(module)
+                module.register_forward_pre_hook(self._save_input)
+                module.register_backward_hook(self._save_grad_output)
+                # print('(%s): %s' % (count, module))
+                count += 1
+
+        has_decay = []
+        no_decay = []
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                match=False
+                if param.data_ptr() in self.param_keys:
+                    full_name = '%s-%s'%(name, self.param_keys[param.data_ptr()].__class__.__name__) 
+                    print('using kfac', name, full_name, param.size())
+                    self.get_name.setdefault(self.param_keys[param.data_ptr()], full_name)
+                else:
+                    if self.using_adamw:
+                        print('using adamw', name, param.size())
+                    else:
+                        print('using sgd', name, param.size())
+
+                    has_decay.append(param)
+
+        if self.using_adamw:
+            param_others = [{'params': has_decay},]
+            self.opt_others = optim.AdamW(param_others, eps=1e-8, betas=(0.9, 0.999),
+                                    lr=self.org_lr, weight_decay=self.org_wt)
+
+
+
+
 
     def _update_inv(self, m):
         """Do eigen decomposition for computing inverse of the ~ fisher.
@@ -191,6 +241,11 @@ class KFACOptimizer(optim.Optimizer):
             for p in group['params']:
                 if p.grad is None:
                     continue
+
+                if self.using_adamw and  (p.data_ptr() not in self.param_keys):
+                    #using opt_others
+                    continue
+
                 d_p = p.grad.data
                 if weight_decay != 0 and self.steps >= 20 * self.TCov:
                     d_p.add_(p.data, alpha=weight_decay)
@@ -205,6 +260,9 @@ class KFACOptimizer(optim.Optimizer):
                     d_p = buf
 
                 p.data.add_(d_p, alpha=-group['lr'])
+
+        if self.using_adamw:
+            self.opt_others.step()
 
     def step(self, closure=None):
         # FIXME(CW): temporal fix for compatibility with Official LR scheduler.
