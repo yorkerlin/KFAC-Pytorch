@@ -21,7 +21,7 @@ class KFACOptimizer(optim.Optimizer):
                  batch_averaged=True,
                  cast_dtype = torch.float32,
                  use_eign = True,
-                 using_adamw = True,
+                 using_adamw = False,
                  ):
         print('org kfac v2')
         if lr < 0.0:
