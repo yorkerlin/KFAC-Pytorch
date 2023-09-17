@@ -23,7 +23,7 @@ class KFACOptimizer(optim.Optimizer):
                  use_eign = True,
                  using_adamw = True,
                  ):
-        print('org kfac')
+        print('org kfac v2')
         if lr < 0.0:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if momentum < 0.0:
@@ -79,19 +79,19 @@ class KFACOptimizer(optim.Optimizer):
                 self.m_gg[module] = torch.diag(gg.new(gg.size(0)).fill_(1))
             update_running_stat(gg, self.m_gg[module], self.stat_decay)
 
-    def _prepare_model(self):
-        count = 0
-        # print(self.model)
-        print("=> We keep following layers in KFAC. ")
-        for module in self.model.modules():
-            classname = module.__class__.__name__
-            # print('=> We keep following layers in KFAC. <=')
-            if classname in self.known_modules:
-                self.modules.append(module)
-                module.register_forward_pre_hook(self._save_input)
-                module.register_backward_hook(self._save_grad_output)
-                # print('(%s): %s' % (count, module))
-                count += 1
+    # def _prepare_model(self):
+        # count = 0
+        # # print(self.model)
+        # print("=> We keep following layers in KFAC. ")
+        # for module in self.model.modules():
+            # classname = module.__class__.__name__
+            # # print('=> We keep following layers in KFAC. <=')
+            # if classname in self.known_modules:
+                # self.modules.append(module)
+                # module.register_forward_pre_hook(self._save_input)
+                # module.register_backward_hook(self._save_grad_output)
+                # # print('(%s): %s' % (count, module))
+                # count += 1
 
 
     def _prepare_model(self): #ok
