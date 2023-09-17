@@ -44,13 +44,16 @@ class KFACOptimizer(optim.Optimizer):
         self.grad_outputs = {}
 
         self.model = model
-        self._prepare_model()
 
         self.steps = 0
         self.cast_dtype = cast_dtype
         self.use_eign = use_eign
         self.grad_scale = 1.0
         self.using_adamw = using_adamw
+        self.org_lr= lr
+        self.org_wt = weight_decay
+        self._prepare_model()
+
 
         self.m_aa, self.m_gg = {}, {}
         self.Q_a, self.Q_g = {}, {}
