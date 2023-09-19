@@ -148,6 +148,10 @@ class KFACOptimizer(optim.Optimizer):
                     betas=(self.adamw_beta1, self.adamw_beta2),
                     lr=self.org_lr, weight_decay=self.org_wt)
 
+            print('adamw eps:', self.adamw_eps)
+            print('adamw beta1:', self.adamw_beta1)
+            print('adamw beta2:', self.adamw_beta2)
+
 
 
 
