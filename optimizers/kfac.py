@@ -22,6 +22,9 @@ class KFACOptimizer(optim.Optimizer):
                  cast_dtype = torch.float32,
                  use_eign = True,
                  using_adamw = False,
+                 adamw_eps = 1e-8,
+                 adamw_beta1 = 0.9,
+                 adamw_beta2 = 0.999,
                  ):
         print('org kfac v2')
         if lr < 0.0:
@@ -52,6 +55,10 @@ class KFACOptimizer(optim.Optimizer):
         self.using_adamw = using_adamw
         self.org_lr= lr
         self.org_wt = weight_decay
+        self.adamw_eps = adamw_eps
+        self.adamw_beta1 = adamw_beta1
+        self.adamw_beta2 = adamw_beta2
+
         self._prepare_model()
 
 
@@ -137,8 +144,13 @@ class KFACOptimizer(optim.Optimizer):
 
         if self.using_adamw:
             param_others = [{'params': has_decay},]
-            self.opt_others = optim.AdamW(param_others, eps=1e-8, betas=(0.9, 0.999),
-                                    lr=self.org_lr, weight_decay=self.org_wt)
+            self.opt_others = optim.AdamW(param_others, eps=self.adamw_eps,
+                    betas=(self.adamw_beta1, self.adamw_beta2),
+                    lr=self.org_lr, weight_decay=self.org_wt)
+
+            print('adamw eps:', self.adamw_eps)
+            print('adamw beta1:', self.adamw_beta1)
+            print('adamw beta2:', self.adamw_beta2)
 
 
 
