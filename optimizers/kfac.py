@@ -25,6 +25,7 @@ class KFACOptimizer(optim.Optimizer):
                  adamw_eps = 1e-8,
                  adamw_beta1 = 0.9,
                  adamw_beta2 = 0.999,
+                 using_costant_adamw_lr = True,
                  ):
         print('org kfac v2')
         if lr < 0.0:
@@ -58,6 +59,7 @@ class KFACOptimizer(optim.Optimizer):
         self.adamw_eps = adamw_eps
         self.adamw_beta1 = adamw_beta1
         self.adamw_beta2 = adamw_beta2
+        self.using_costant_adamw_lr = using_costant_adamw_lr
 
         self._prepare_model()
 
@@ -277,9 +279,10 @@ class KFACOptimizer(optim.Optimizer):
                 p.data.add_(d_p, alpha=-group['lr'])
 
         if self.using_adamw:
-            for group in self.opt_others.param_groups:
-                if 'lr' in group:
-                    group['lr'] = self.param_groups[0]['lr']
+            if not self.using_costant_adamw_lr:
+                for group in self.opt_others.param_groups:
+                    if 'lr' in group:
+                        group['lr'] = self.param_groups[0]['lr']
             self.opt_others.step()
 
     def step(self, closure=None):
