@@ -265,6 +265,9 @@ class KFACOptimizer(optim.Optimizer):
                 p.data.add_(d_p, alpha=-group['lr'])
 
         if self.using_adamw:
+            for group in self.opt_others.param_groups:
+                if 'lr' in group:
+                    group['lr'] = self.param_groups[0]['lr']
             self.opt_others.step()
 
     def step(self, closure=None):
