@@ -85,6 +85,8 @@ class KFACOptimizer(optim.Optimizer):
             # Initialize buffers
             if self.steps == 0:
                 self.m_aa[module] = torch.diag(aa.new(aa.size(0)).fill_(1))
+                print('debug', self.cast_dtype)
+
             update_running_stat(aa, self.m_aa[module], self.stat_decay)
 
     def _save_grad_output(self, module, grad_input, grad_output):
@@ -103,6 +105,8 @@ class KFACOptimizer(optim.Optimizer):
             g = g/self.grad_scale
             gg = g.t() @ g
  
+            if self.steps == 0:
+                print('debug', self.grad_scale, self.mode)
 
             # Initialize buffers
             if self.steps == 0:
