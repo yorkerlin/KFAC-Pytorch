@@ -3,9 +3,9 @@ import math
 import torch
 import torch.optim as optim
 
-from utils.org_kfac_utils import (ComputeCovA, ComputeCovG)
-from utils.org_kfac_utils import update_running_stat
-
+# from .org_kfac_utils import (ComputeCovA, ComputeCovG)
+from .org_kfac_utils import update_running_stat
+from .utils import process_grad_output, process_input
 
 class KFACOptimizer(optim.Optimizer):
     def __init__(self,
@@ -21,8 +21,14 @@ class KFACOptimizer(optim.Optimizer):
                  batch_averaged=True,
                  cast_dtype = torch.float32,
                  use_eign = True,
+                 using_adamw = False,
+                 adamw_eps = 1e-8,
+                 adamw_beta1 = 0.9,
+                 adamw_beta2 = 0.999,
+                 using_constant_adamw_lr = True,
+                 mode='expand',
                  ):
-        print('org kfac')
+        print('org kfac v2')
         if lr < 0.0:
             raise ValueError("Invalid learning rate: {}".format(lr))
         if momentum < 0.0:
@@ -33,8 +39,8 @@ class KFACOptimizer(optim.Optimizer):
                         weight_decay=weight_decay)
         # TODO (CW): KFAC optimizer now only support model as input
         super(KFACOptimizer, self).__init__(model.parameters(), defaults)
-        self.CovAHandler = ComputeCovA()
-        self.CovGHandler = ComputeCovG()
+        # self.CovAHandler = ComputeCovA()
+        # self.CovGHandler = ComputeCovG()
         self.batch_averaged = batch_averaged
 
         self.known_modules = {'Linear', 'Conv2d'}
@@ -42,13 +48,24 @@ class KFACOptimizer(optim.Optimizer):
         self.modules = []
         self.grad_outputs = {}
 
+        self.mode = mode
+        print('using %s approximation'%mode)
         self.model = model
-        self._prepare_model()
 
         self.steps = 0
         self.cast_dtype = cast_dtype
         self.use_eign = use_eign
         self.grad_scale = 1.0
+        self.using_adamw = using_adamw
+        self.org_lr= lr
+        self.org_wt = weight_decay
+        self.adamw_eps = adamw_eps
+        self.adamw_beta1 = adamw_beta1
+        self.adamw_beta2 = adamw_beta2
+        self.using_constant_adamw_lr = using_constant_adamw_lr
+
+        self._prepare_model()
+
 
         self.m_aa, self.m_gg = {}, {}
         self.Q_a, self.Q_g = {}, {}
@@ -61,7 +78,10 @@ class KFACOptimizer(optim.Optimizer):
 
     def _save_input(self, module, input):
         if torch.is_grad_enabled() and self.steps % self.TCov == 0:
-            aa = self.CovAHandler(input[0].data, module)
+            # aa = self.CovAHandler(input[0].data, module)
+            a = process_input(input[0].data, module, self.mode).to(dtype=self.cast_dtype)
+            aa = a.t() @ a
+
             # Initialize buffers
             if self.steps == 0:
                 self.m_aa[module] = torch.diag(aa.new(aa.size(0)).fill_(1))
@@ -70,26 +90,92 @@ class KFACOptimizer(optim.Optimizer):
     def _save_grad_output(self, module, grad_input, grad_output):
         # Accumulate statistics for Fisher matrices
         if self.steps % self.TCov == 0:
-            gg = self.CovGHandler(grad_output[0].data, module, self.batch_averaged)
-            gg /= (self.grad_scale**2)
+            # gg = self.CovGHandler(grad_output[0].data, module, self.batch_averaged)
+            # gg /= (self.grad_scale**2)
+
+            g = process_grad_output(
+                grad_output[0].data,
+                module,
+                self.batch_averaged,
+                self.mode,
+                1.0
+            )
+            g = g/self.grad_scale
+            gg = g.t() @ g
+ 
+
             # Initialize buffers
             if self.steps == 0:
                 self.m_gg[module] = torch.diag(gg.new(gg.size(0)).fill_(1))
             update_running_stat(gg, self.m_gg[module], self.stat_decay)
 
-    def _prepare_model(self):
+    # def _prepare_model(self):
+        # count = 0
+        # # print(self.model)
+        # print("=> We keep following layers in KFAC. ")
+        # for module in self.model.modules():
+            # classname = module.__class__.__name__
+            # # print('=> We keep following layers in KFAC. <=')
+            # if classname in self.known_modules:
+                # self.modules.append(module)
+                # module.register_forward_pre_hook(self._save_input)
+                # module.register_backward_hook(self._save_grad_output)
+                # # print('(%s): %s' % (count, module))
+                # count += 1
+
+
+    def _prepare_model(self): #ok
         count = 0
+        self.param_keys={}
+        self.get_name = {}
         # print(self.model)
-        print("=> We keep following layers in KFAC. ")
+        print("=> We keep following layers in. ")
         for module in self.model.modules():
             classname = module.__class__.__name__
-            # print('=> We keep following layers in KFAC. <=')
+            # print('=> We keep following layers. <=')
             if classname in self.known_modules:
+
+                for name, param in module.named_parameters():
+                    if param.requires_grad:
+                        self.param_keys.setdefault(param.data_ptr(), module)
+
                 self.modules.append(module)
                 module.register_forward_pre_hook(self._save_input)
-                module.register_backward_hook(self._save_grad_output)
+                # module.register_backward_hook(self._save_grad_output)
+                module.register_full_backward_hook(self._save_grad_output)
                 # print('(%s): %s' % (count, module))
                 count += 1
+
+        has_decay = []
+        no_decay = []
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                match=False
+                if param.data_ptr() in self.param_keys:
+                    full_name = '%s-%s'%(name, self.param_keys[param.data_ptr()].__class__.__name__) 
+                    print('using kfac', name, full_name, param.size())
+                    self.get_name.setdefault(self.param_keys[param.data_ptr()], full_name)
+                else:
+                    if self.using_adamw:
+                        print('using adamw', name, param.size())
+                    else:
+                        print('using sgd', name, param.size())
+
+                    has_decay.append(param)
+
+        if self.using_adamw:
+            param_others = [{'params': has_decay},]
+            self.opt_others = optim.AdamW(param_others, eps=self.adamw_eps,
+                    betas=(self.adamw_beta1, self.adamw_beta2),
+                    lr=self.org_lr, weight_decay=self.org_wt)
+
+            print('adamw eps:', self.adamw_eps)
+            print('adamw beta1:', self.adamw_beta1)
+            print('adamw beta2:', self.adamw_beta2)
+
+
+
+
 
     def _update_inv(self, m):
         """Do eigen decomposition for computing inverse of the ~ fisher.
@@ -191,6 +277,11 @@ class KFACOptimizer(optim.Optimizer):
             for p in group['params']:
                 if p.grad is None:
                     continue
+
+                if self.using_adamw and  (p.data_ptr() not in self.param_keys):
+                    #using opt_others
+                    continue
+
                 d_p = p.grad.data
                 if weight_decay != 0 and self.steps >= 20 * self.TCov:
                     d_p.add_(p.data, alpha=weight_decay)
@@ -205,6 +296,13 @@ class KFACOptimizer(optim.Optimizer):
                     d_p = buf
 
                 p.data.add_(d_p, alpha=-group['lr'])
+
+        if self.using_adamw:
+            if not self.using_constant_adamw_lr:
+                for group in self.opt_others.param_groups:
+                    if 'lr' in group:
+                        group['lr'] = self.param_groups[0]['lr']
+            self.opt_others.step()
 
     def step(self, closure=None):
         # FIXME(CW): temporal fix for compatibility with Official LR scheduler.
